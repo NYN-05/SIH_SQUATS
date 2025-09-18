@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Fitness Trainer</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+
+  <body>
+    <header class="site-header">
+      <h1>AI Fitness Trainer</h1>
+    </header>
+
+    <main class="grid">
+      <section class="left">
+        <div class="video-wrap">
+          <img id="video" src="/video_feed" alt="Video feed" crossorigin="anonymous">
+          <div class="overlay" id="overlay">Waiting for camera...</div>
+        </div>
+      </section>
+
+      <aside class="right">
+        <div class="panel">
+          <div class="controls">
+            <button id="start" class="btn primary">Start</button>
+            <button id="stop" class="btn ghost">Stop</button>
+            <button id="reset" class="btn">Reset</button>
+          </div>
+
+          <div id="status" class="status">
+            <div>Correct: <strong id="correct">0</strong></div>
+            <div>Incorrect: <strong id="incorrect">0</strong></div>
+            <div>Stage: <strong id="stage">-</strong></div>
+            <div>Feedback: <span id="feedback">-</span></div>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <script>
+      // Controls
+      const startBtn = document.getElementById('start');
+      const stopBtn = document.getElementById('stop');
+      const resetBtn = document.getElementById('reset');
+
+      startBtn.addEventListener('click', async ()=>{ startBtn.disabled = true; await fetch('/start', {method:'POST'}); startBtn.disabled = false; });
+      stopBtn.addEventListener('click', async ()=>{ stopBtn.disabled = true; await fetch('/stop', {method:'POST'}); stopBtn.disabled = false; });
+      resetBtn.addEventListener('click', async ()=>{ await fetch('/reset', {method:'POST'}); await refreshStatus(); });
+
+      const overlay = document.getElementById('overlay');
+      const videoImg = document.getElementById('video');
+
+      // Hide overlay when MJPEG responds or when camera_ready is true
+      videoImg.addEventListener('load', ()=>{ if(overlay) overlay.style.display = 'none'; });
+      videoImg.addEventListener('error', ()=>{ if(overlay) overlay.innerText = 'Unable to load stream'; });
+
+      async function refreshStatus(){
+        try{
+          const res = await fetch('/status');
+          const j = await res.json();
+          document.getElementById('correct').innerText = j.correct ?? 0;
+          document.getElementById('incorrect').innerText = j.incorrect ?? 0;
+          document.getElementById('stage').innerText = j.stage ?? '-';
+          document.getElementById('feedback').innerText = j.feedback ?? '-';
+          if (j.camera_ready) overlay.style.display = 'none'; else overlay.style.display = 'flex';
+        }catch(e){ /* ignore */ }
+      }
+
+      // Initial load and polling
+      window.addEventListener('load', ()=>{ refreshStatus(); setInterval(refreshStatus, 800); });
+
+      // Click-to-fullscreen
+      document.querySelector('.video-wrap').addEventListener('click', async ()=>{
+        const el = document.querySelector('.video-wrap');
+        if(!document.fullscreenElement){ try{ await el.requestFullscreen(); }catch(e){} } else { try{ await document.exitFullscreen(); }catch(e){} }
+      });
+    </script>
+  </body>
+</html>
