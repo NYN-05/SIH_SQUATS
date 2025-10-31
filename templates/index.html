@@ -3,53 +3,331 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AI Fitness Trainer</title>
+    <title>AI Fitness Trainer Pro</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path fill='%234F46E5' d='M16 4L4 10V22L16 28L28 22V10L16 4Z'/></svg>">
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
   </head>
 
   <body>
-    <header class="site-header">
-      <h1>AI Fitness Trainer</h1>
-    </header>
+    <!-- Navigation Bar -->
+    <nav class="navbar">
+      <div class="nav-container">
+        <div class="nav-brand">
+          <div class="logo-icon">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+              <path d="M16 4L4 10V22L16 28L28 22V10L16 4Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+              <path d="M16 16L4 10M16 16L28 10M16 16V28" stroke="currentColor" stroke-width="2"/>
+            </svg>
+          </div>
+          <div class="brand-text">
+            <h1>AI Fitness Trainer</h1>
+            <p class="brand-subtitle">Powered by MediaPipe</p>
+          </div>
+        </div>
+        <div class="nav-actions">
+          <button class="icon-btn" id="fullscreenBtn" title="Toggle Fullscreen">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M2 7V3H6M18 7V3H14M2 13V17H6M18 13V17H14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </nav>
 
-    <main class="grid">
-      <section class="left">
-        <div class="video-wrap">
-          <img id="video" src="/video_feed" alt="Video feed" crossorigin="anonymous">
-          <div class="overlay" id="overlay">Waiting for camera...</div>
+    <!-- Main Content -->
+    <main class="main-container">
+      <!-- Video Section -->
+      <section class="video-section">
+        <div class="video-card">
+          <div class="video-header">
+            <h2 class="video-title">Live Feed</h2>
+            <div class="status-badge" id="cameraStatus">
+              <span class="status-dot"></span>
+              <span class="status-text">Initializing...</span>
+            </div>
+          </div>
+          <div class="video-container">
+            <img id="video" src="/video_feed?mode=squat" alt="Video feed" crossorigin="anonymous">
+            <div class="video-overlay" id="overlay">
+              <div class="loader"></div>
+              <p>Initializing camera...</p>
+            </div>
+          </div>
         </div>
       </section>
 
-      <aside class="right">
-        <div class="panel">
-          <div class="controls">
-            <button id="start" class="btn primary">Start</button>
-            <button id="stop" class="btn ghost">Stop</button>
-            <button id="reset" class="btn">Reset</button>
+      <!-- Control Panel -->
+      <aside class="control-panel">
+        <!-- Mode Selector -->
+        <div class="card mode-card">
+          <div class="card-header">
+            <h3 class="card-title">Training Mode</h3>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M10 18C14.4183 18 18 14.4183 18 10C18 5.58172 14.4183 2 10 2C5.58172 2 2 5.58172 2 10C2 14.4183 5.58172 18 10 18Z" stroke="currentColor" stroke-width="2"/>
+              <path d="M10 6V10L13 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
           </div>
+          <div class="card-content">
+            <div class="mode-selector">
+              <button class="mode-btn active" data-mode="squat">
+                <div class="mode-icon">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 2L12 6M12 18L12 22M6 12L2 12M22 12L18 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+                  </svg>
+                </div>
+                <span>Squat Counter</span>
+              </button>
+              <button class="mode-btn" data-mode="jump">
+                <div class="mode-icon">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 4V16M12 4L8 8M12 4L16 8M4 20H20" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </div>
+                <span>Vertical Jump</span>
+              </button>
+            </div>
+          </div>
+        </div>
 
-          <div id="status" class="status">
-            <div>Correct: <strong id="correct">0</strong></div>
-            <div>Incorrect: <strong id="incorrect">0</strong></div>
-            <div>Stage: <strong id="stage">-</strong></div>
-            <div>Feedback: <span id="feedback">-</span></div>
+        <!-- Controls -->
+        <div class="card controls-card">
+          <div class="card-header">
+            <h3 class="card-title">Controls</h3>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M10 2V18M10 2L6 6M10 2L14 6M10 18L6 14M10 18L14 14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div class="card-content">
+            <div class="control-buttons">
+              <button id="start" class="btn btn-primary">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                  <path d="M5 3L15 9L5 15V3Z" fill="currentColor"/>
+                </svg>
+                <span>Start Training</span>
+              </button>
+              <button id="stop" class="btn btn-secondary">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                  <rect x="4" y="4" width="10" height="10" fill="currentColor"/>
+                </svg>
+                <span>Stop</span>
+              </button>
+              <button id="reset" class="btn btn-outline">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                  <path d="M4 9C4 6.23858 6.23858 4 9 4C11.7614 4 14 6.23858 14 9C14 11.7614 11.7614 14 9 14C7.5 14 6.5 13.5 5.5 12.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  <path d="M4 12L4 9L7 9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span>Reset</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Statistics -->
+        <div class="card stats-card">
+          <div class="card-header">
+            <h3 class="card-title">Performance</h3>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M2 12L6 8L10 12L18 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M14 4H18V8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div class="card-content">
+            <!-- Squat Stats -->
+            <div id="squat-stats" class="stats-container">
+              <div class="stat-item">
+                <div class="stat-label">Correct Reps</div>
+                <div class="stat-value success" id="correct">0</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-label">Incorrect Reps</div>
+                <div class="stat-value error" id="incorrect">0</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-label">Current Stage</div>
+                <div class="stat-value" id="stage">-</div>
+              </div>
+              <div class="stat-item full-width">
+                <div class="stat-label">Feedback</div>
+                <div class="feedback-box" id="feedback">Ready to start training</div>
+              </div>
+            </div>
+
+            <!-- Jump Stats -->
+            <div id="jump-stats" class="stats-container" style="display: none;">
+              <div class="stat-item">
+                <div class="stat-label">Status</div>
+                <div class="stat-value" id="jump-state">IDLE</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-label">Jump Height</div>
+                <div class="stat-value highlight" id="jump-height">-</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-label">Validation</div>
+                <div class="stat-value" id="jump-valid">-</div>
+              </div>
+              <div class="stat-item full-width">
+                <div class="stat-label">Feedback</div>
+                <div class="feedback-box" id="jump-feedback">Touch right hand to nose to ARM</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Instructions -->
+        <div class="card instructions-card">
+          <div class="card-header">
+            <h3 class="card-title">Instructions</h3>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="2"/>
+              <path d="M10 10V14M10 6V7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div class="card-content">
+            <div id="squat-instructions" class="instructions">
+              <ul class="instruction-list">
+                <li>Stand in front of camera with full body visible</li>
+                <li>Click <strong>Start Training</strong> to begin</li>
+                <li>Perform squats with proper form</li>
+                <li>Monitor feedback for form corrections</li>
+              </ul>
+            </div>
+            <div id="jump-instructions" class="instructions" style="display: none;">
+              <ul class="instruction-list">
+                <li><strong>ARM:</strong> Touch right hand to nose</li>
+                <li><strong>JUMP:</strong> Perform vertical jump</li>
+                <li><strong>LAND:</strong> Keep legs straight</li>
+                <li><strong>RESET:</strong> Touch left hand to nose</li>
+              </ul>
+            </div>
           </div>
         </div>
       </aside>
     </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <p>&copy; 2025 AI Fitness Trainer Pro. Built with MediaPipe & Flask.</p>
+    </footer>
 
     <script>
       // Controls
       const startBtn = document.getElementById('start');
       const stopBtn = document.getElementById('stop');
       const resetBtn = document.getElementById('reset');
-
-      startBtn.addEventListener('click', async ()=>{ startBtn.disabled = true; await fetch('/start', {method:'POST'}); startBtn.disabled = false; });
-      stopBtn.addEventListener('click', async ()=>{ stopBtn.disabled = true; await fetch('/stop', {method:'POST'}); stopBtn.disabled = false; });
-      resetBtn.addEventListener('click', async ()=>{ await fetch('/reset', {method:'POST'}); await refreshStatus(); });
-
-      const overlay = document.getElementById('overlay');
+      const modeButtons = document.querySelectorAll('.mode-btn');
       const videoImg = document.getElementById('video');
+      const overlay = document.getElementById('overlay');
+      
+      let currentMode = 'squat';
+
+      // Mode switching - handle button clicks
+      modeButtons.forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const newMode = btn.dataset.mode;
+          const previousMode = currentMode;
+          
+          // Don't switch if already in this mode
+          if (newMode === currentMode) return;
+        
+          try {
+            // Disable controls during switch
+            modeButtons.forEach(b => b.disabled = true);
+            startBtn.disabled = true;
+            stopBtn.disabled = true;
+            resetBtn.disabled = true;
+            
+            const response = await fetch('/switch_mode', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({mode: newMode})
+            });
+            
+            if (!response.ok) {
+              throw new Error(`Failed to switch mode: ${response.status}`);
+            }
+            
+            const result = await response.json();
+            
+            if (result.status === 'switched' || result.status === 'already_active') {
+              currentMode = newMode;
+              
+              // Update active button state
+              modeButtons.forEach(b => {
+                b.classList.toggle('active', b.dataset.mode === newMode);
+              });
+              
+              // Update video feed with cache buster
+              videoImg.src = `/video_feed?mode=${newMode}&t=${Date.now()}`;
+              
+              // Show/hide appropriate stats panels
+              if (newMode === 'squat') {
+                document.getElementById('squat-stats').style.display = 'grid';
+                document.getElementById('jump-stats').style.display = 'none';
+                document.getElementById('squat-instructions').style.display = 'block';
+                document.getElementById('jump-instructions').style.display = 'none';
+              } else {
+                document.getElementById('squat-stats').style.display = 'none';
+                document.getElementById('jump-stats').style.display = 'grid';
+                document.getElementById('squat-instructions').style.display = 'none';
+                document.getElementById('jump-instructions').style.display = 'block';
+              }
+              
+              // Wait a moment for new mode to initialize
+              await new Promise(resolve => setTimeout(resolve, 500));
+              await refreshStatus();
+              
+              console.log(`✓ Switched to ${newMode} mode`);
+            } else {
+              throw new Error(result.message || 'Unknown error');
+            }
+          } catch(e) {
+            console.error('Mode switch error:', e);
+            alert(`Failed to switch mode: ${e.message}`);
+            currentMode = previousMode;
+          } finally {
+            // Re-enable controls
+            modeButtons.forEach(b => b.disabled = false);
+            startBtn.disabled = false;
+            stopBtn.disabled = false;
+            resetBtn.disabled = false;
+          }
+        });
+      });
+
+      startBtn.addEventListener('click', async ()=>{ 
+        startBtn.disabled = true; 
+        await fetch('/start', {
+          method:'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({mode: currentMode})
+        }); 
+        startBtn.disabled = false; 
+      });
+      
+      stopBtn.addEventListener('click', async ()=>{ 
+        stopBtn.disabled = true; 
+        await fetch('/stop', {
+          method:'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({mode: currentMode})
+        }); 
+        stopBtn.disabled = false; 
+      });
+      
+      resetBtn.addEventListener('click', async ()=>{ 
+        await fetch('/reset', {
+          method:'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({mode: currentMode})
+        }); 
+        await refreshStatus(); 
+      });
 
       // Hide overlay when MJPEG responds or when camera_ready is true
       videoImg.addEventListener('load', ()=>{ if(overlay) overlay.style.display = 'none'; });
@@ -57,24 +335,77 @@
 
       async function refreshStatus(){
         try{
-          const res = await fetch('/status');
+          const res = await fetch(`/status?mode=${currentMode}`);
+          
+          if (!res.ok) {
+            console.error('Status fetch failed:', res.status);
+            return;
+          }
+          
           const j = await res.json();
-          document.getElementById('correct').innerText = j.correct ?? 0;
-          document.getElementById('incorrect').innerText = j.incorrect ?? 0;
-          document.getElementById('stage').innerText = j.stage ?? '-';
-          document.getElementById('feedback').innerText = j.feedback ?? '-';
-          if (j.camera_ready) overlay.style.display = 'none'; else overlay.style.display = 'flex';
-        }catch(e){ /* ignore */ }
+          
+          // Handle error responses
+          if (j.error) {
+            console.error('Status error:', j.error);
+            if (!j.camera_ready) {
+              overlay.innerText = 'Camera not ready';
+              overlay.style.display = 'flex';
+            }
+            return;
+          }
+          
+          if (currentMode === 'squat') {
+            document.getElementById('correct').innerText = j.correct ?? 0;
+            document.getElementById('incorrect').innerText = j.incorrect ?? 0;
+            document.getElementById('stage').innerText = j.stage ?? '-';
+            document.getElementById('feedback').innerText = j.feedback ?? '-';
+          } else {
+            document.getElementById('jump-state').innerText = (j.state ?? '-').toUpperCase();
+            document.getElementById('jump-height').innerText = j.last_jump_inches > 0 ? `${j.last_jump_inches} in` : '-';
+            document.getElementById('jump-valid').innerText = j.last_jump_inches > 0 ? (j.last_jump_valid ? '✓ YES' : '✗ NO') : '-';
+            document.getElementById('jump-feedback').innerText = j.feedback ?? '-';
+          }
+          
+          // Update camera status badge
+          const cameraStatus = document.getElementById('cameraStatus');
+          if (cameraStatus) {
+            const statusText = cameraStatus.querySelector('.status-text');
+            const statusDot = cameraStatus.querySelector('.status-dot');
+            if (j.camera_ready) {
+              if (statusText) statusText.innerText = 'Camera Ready';
+              if (statusDot) statusDot.style.backgroundColor = '#10b981';
+            } else {
+              if (statusText) statusText.innerText = 'Initializing...';
+              if (statusDot) statusDot.style.backgroundColor = '#f59e0b';
+            }
+          }
+          
+          if (j.camera_ready) {
+            overlay.style.display = 'none';
+          } else {
+            overlay.innerHTML = '<div class="loader"></div><p>Initializing camera...</p>';
+            overlay.style.display = 'flex';
+          }
+        }catch(e){ 
+          console.error('Status refresh error:', e);
+        }
       }
 
       // Initial load and polling
       window.addEventListener('load', ()=>{ refreshStatus(); setInterval(refreshStatus, 800); });
 
-      // Click-to-fullscreen
-      document.querySelector('.video-wrap').addEventListener('click', async ()=>{
-        const el = document.querySelector('.video-wrap');
-        if(!document.fullscreenElement){ try{ await el.requestFullscreen(); }catch(e){} } else { try{ await document.exitFullscreen(); }catch(e){} }
-      });
+      // Fullscreen button
+      const fullscreenBtn = document.getElementById('fullscreenBtn');
+      if (fullscreenBtn) {
+        fullscreenBtn.addEventListener('click', async ()=>{
+          const el = document.querySelector('.video-container') || document.documentElement;
+          if(!document.fullscreenElement){ 
+            try{ await el.requestFullscreen(); }catch(e){ console.error('Fullscreen error:', e); } 
+          } else { 
+            try{ await document.exitFullscreen(); }catch(e){ console.error('Exit fullscreen error:', e); } 
+          }
+        });
+      }
     </script>
   </body>
 </html>

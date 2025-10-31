@@ -4,6 +4,15 @@ import numpy as np
 import pyttsx3
 import threading
 import time
+import os
+
+# Optional HTTP client for backend integration
+try:
+    import requests
+    _requests_available = True
+except Exception:
+    requests = None
+    _requests_available = False
 
 class FitnessTrainer:
     """Enhanced FitnessTrainer with better camera handling and error recovery."""
@@ -71,6 +80,12 @@ class FitnessTrainer:
         self.thread = None
         self.frame_lock = threading.Lock()
         self.current_frame = None
+
+        # Backend integration (optional)
+        # Provide BACKEND_URL environment variable like: http://127.0.0.1:5000
+        self.backend_url = os.getenv('BACKEND_URL')
+        self.session_id = None
+        self.backend_enabled = bool(self.backend_url and _requests_available)
         
         # Initialize camera
         self.init_camera()
@@ -296,6 +311,12 @@ class FitnessTrainer:
                     # Log
                     if self.log_csv:
                         self._log_event('correct')
+                    # Send update to backend (non-blocking)
+                    try:
+                        if self.backend_enabled:
+                            threading.Thread(target=self._send_count_update, args=(True,), daemon=True).start()
+                    except Exception:
+                        pass
                     # reset squat trackers
                     self.squat_started = False
                     self.min_knee_angle = 180.0
@@ -323,6 +344,12 @@ class FitnessTrainer:
                             threading.Thread(target=self.speak_feedback, args=(feedback,), daemon=True).start()
                         if self.log_csv:
                             self._log_event('incorrect')
+                            # Send update to backend (non-blocking)
+                            try:
+                                if self.backend_enabled:
+                                    threading.Thread(target=self._send_count_update, args=(False,), daemon=True).start()
+                            except Exception:
+                                pass
 
             # Reset squat tracking when we are standing or after a completion
             if current_stage == "S1":
@@ -351,6 +378,54 @@ class FitnessTrainer:
                 self.engine.runAndWait()
             except:
                 pass
+
+    # --- Backend helper methods ---
+    def _create_remote_session(self):
+        """Create a session on the backend and store the session id."""
+        if not self.backend_enabled:
+            return
+        try:
+            url = f"{self.backend_url.rstrip('/')}/sessions"
+            payload = {
+                'correct': int(self.correct),
+                'incorrect': int(self.incorrect),
+                'feedback': self.feedback,
+            }
+            resp = requests.post(url, json=payload, timeout=3)
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                self.session_id = data.get('id')
+        except Exception:
+            # non-fatal
+            pass
+
+    def _update_remote_session(self, ended=False):
+        """Send a PATCH request to update counts/ended_at for current session."""
+        if not self.backend_enabled or not self.session_id:
+            return
+        try:
+            url = f"{self.backend_url.rstrip('/')}/sessions/{self.session_id}"
+            payload = {
+                'correct': int(self.correct),
+                'incorrect': int(self.incorrect),
+            }
+            if ended:
+                from datetime import datetime
+                payload['ended_at'] = datetime.utcnow().isoformat()
+            requests.patch(url, json=payload, timeout=3)
+        except Exception:
+            pass
+
+    def _send_count_update(self, correct_incremented: bool):
+        """Non-blocking helper to create session if needed and update counts."""
+        try:
+            # ensure remote session exists
+            if not self.session_id:
+                self._create_remote_session()
+            # send counts
+            self._update_remote_session(ended=False)
+        except Exception:
+            pass
 
     def _draw_status_overlay(self, image):
         """Draw a semi-opaque status box with counters and feedback on the frame."""
@@ -449,30 +524,7 @@ class FitnessTrainer:
                 landmarks = results.pose_landmarks.landmark
                 knee_angle, back_angle = self.analyze_squat(landmarks)
                 
-                # Add text overlays with better positioning
-                overlay_y = 30
-                line_height = 30
-                
-                cv2.putText(image_bgr, f'Correct: {self.correct}', (10, overlay_y),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                overlay_y += line_height
-                
-                cv2.putText(image_bgr, f'Incorrect: {self.incorrect}', (10, overlay_y),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                overlay_y += line_height
-                
-                cv2.putText(image_bgr, f'Stage: {self.stage or "-"}', (10, overlay_y),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-                overlay_y += line_height
-                
-                cv2.putText(image_bgr, f'Knee: {int(knee_angle)}°', (10, overlay_y),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
-                overlay_y += 20
-                
-                cv2.putText(image_bgr, f'Back: {int(back_angle)}°', (10, overlay_y),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
-                
-                # Ensure status overlay (counters/feedback) is always drawn and visible
+                # Draw status overlay (counters/feedback) - single clean overlay box
                 try:
                     self._draw_status_overlay(image_bgr)
                 except Exception:
@@ -536,6 +588,12 @@ class FitnessTrainer:
             self.running = True
             self.thread = threading.Thread(target=self.run_processing, daemon=True)
             self.thread.start()
+            # Create remote session record (non-blocking)
+            try:
+                if self.backend_enabled:
+                    threading.Thread(target=self._create_remote_session, daemon=True).start()
+            except Exception:
+                pass
             print("▶️  Training started")
     
     def stop(self):
@@ -543,6 +601,12 @@ class FitnessTrainer:
         self.running = False
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=2)
+        # Finalize remote session (non-blocking)
+        try:
+            if self.backend_enabled:
+                threading.Thread(target=self._update_remote_session, kwargs={'ended': True}, daemon=True).start()
+        except Exception:
+            pass
         print("⏹️  Training stopped")
     
     def get_frame(self):
@@ -653,6 +717,364 @@ def main():
     finally:
         trainer.release()
         cv2.destroyAllWindows()
+
+class JumpTrainer:
+    """Vertical Jump Height Measurement Trainer."""
+    
+    def __init__(self, camera_index=0, width=640, height=480, camera_backend=None):
+        self.mp_pose = mp.solutions.pose
+        self.pose = self.mp_pose.Pose(
+            static_image_mode=False,
+            model_complexity=0,  # lighter model for real-time
+            enable_segmentation=False,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+        self.mp_drawing = mp.solutions.drawing_utils
+        
+        # Camera setup
+        self.camera_index = camera_index
+        self.camera_backend = camera_backend
+        self.width = width
+        self.height = height
+        self.cap = None
+        self.camera_initialized = False
+        
+        # Jump tracking state
+        self.state = "idle"  # idle -> armed -> airborne -> landed
+        self.baseline_nose_y = None
+        self.peak_delta_pixels = 0.0
+        self.last_jump_inches = 0.0
+        self.last_jump_valid = False
+        self.last_jump_reason = ""
+        self.airborne_frames = 0
+        self.nose_y_buffer = []
+        self.prev_dy = None
+        
+        # Configuration
+        self.calibration_inches = 12.0
+        self.calibration_pixels = 100.0
+        self.min_jump_inches = 2.0
+        self.min_airborne_frames = 6
+        
+        # Threading
+        self.running = False
+        self.thread = None
+        self.frame_lock = threading.Lock()
+        self.current_frame = None
+        self.feedback = "Touch right hand to nose to ARM"
+        
+        # Initialize camera (same as FitnessTrainer)
+        self._init_camera()
+    
+    def _init_camera(self):
+        """Initialize camera with retry logic."""
+        max_retries = 3
+        retry_delay = 0.5
+        
+        for attempt in range(max_retries):
+            try:
+                # Release any existing capture
+                if self.cap:
+                    try:
+                        self.cap.release()
+                    except:
+                        pass
+                    time.sleep(0.2)
+                
+                if self.camera_backend == 'dshow':
+                    self.cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
+                elif self.camera_backend == 'msmf':
+                    self.cap = cv2.VideoCapture(self.camera_index, cv2.CAP_MSMF)
+                else:
+                    self.cap = cv2.VideoCapture(self.camera_index)
+                
+                if self.cap and self.cap.isOpened():
+                    self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+                    self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                    self.cap.set(cv2.CAP_PROP_FPS, 30)
+                    
+                    # Test read
+                    ret, _ = self.cap.read()
+                    if ret:
+                        self.camera_initialized = True
+                        print(f"✅ Jump camera initialized at index {self.camera_index} (attempt {attempt + 1})")
+                        return
+                
+                print(f"⚠️  Camera attempt {attempt + 1} failed, retrying...")
+                time.sleep(retry_delay)
+                
+            except Exception as e:
+                print(f"❌ Camera initialization error (attempt {attempt + 1}): {e}")
+                time.sleep(retry_delay)
+        
+        print(f"❌ Failed to initialize camera after {max_retries} attempts")
+        self.camera_initialized = False
+    
+    def inches_per_pixel(self):
+        return self.calibration_inches / self.calibration_pixels if self.calibration_pixels > 0 else 0.12
+    
+    def landmark_xy(self, landmarks, idx, w, h):
+        lm = landmarks[idx]
+        if lm.visibility < 0.4:
+            return None
+        return (lm.x * w, lm.y * h)
+    
+    def distance(self, p1, p2):
+        return ((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)**0.5
+    
+    def is_hand_to_nose(self, landmarks, w, h, hand_idx, nose_idx=0, thresh=60.0):
+        p_hand = self.landmark_xy(landmarks, hand_idx, w, h)
+        p_nose = self.landmark_xy(landmarks, nose_idx, w, h)
+        if not p_hand or not p_nose:
+            return False
+        return self.distance(p_hand, p_nose) < thresh
+    
+    def detect_squat_cheat(self, landmarks, w, h):
+        """Detect if landing in a squat position (cheating)."""
+        idx_map = {
+            'LEFT_HIP': 23, 'RIGHT_HIP': 24,
+            'LEFT_KNEE': 25, 'RIGHT_KNEE': 26,
+            'LEFT_ANKLE': 27, 'RIGHT_ANKLE': 28
+        }
+        pts = {}
+        for name, val in idx_map.items():
+            p = self.landmark_xy(landmarks, val, w, h)
+            if not p:
+                return False
+            pts[name] = p
+        
+        hip_y = (pts["LEFT_HIP"][1] + pts["RIGHT_HIP"][1]) / 2
+        knee_y = (pts["LEFT_KNEE"][1] + pts["RIGHT_KNEE"][1]) / 2
+        
+        # Calculate knee angle
+        def angle(a, b, c):
+            ba = np.array(a) - np.array(b)
+            bc = np.array(c) - np.array(b)
+            cosang = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-6)
+            return np.degrees(np.arccos(np.clip(cosang, -1, 1)))
+        
+        knee_angle_left = angle(pts["LEFT_HIP"], pts["LEFT_KNEE"], pts["LEFT_ANKLE"])
+        knee_angle_right = angle(pts["RIGHT_HIP"], pts["RIGHT_KNEE"], pts["RIGHT_ANKLE"])
+        knee_angle = (knee_angle_left + knee_angle_right) / 2
+        
+        is_knee_bent = knee_angle < 150
+        is_hip_low = hip_y > (knee_y - 20)
+        
+        return is_knee_bent and is_hip_low
+    
+    def process_frame(self, frame):
+        """Process a single frame for jump detection."""
+        h, w = frame.shape[:2]
+        image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.pose.process(image_rgb)
+        
+        image_bgr = frame.copy()
+        
+        if results.pose_landmarks:
+            landmarks = results.pose_landmarks.landmark
+            
+            # Draw pose
+            self.mp_drawing.draw_landmarks(
+                image_bgr,
+                results.pose_landmarks,
+                mp.solutions.pose.POSE_CONNECTIONS,
+                landmark_drawing_spec=self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2),
+                connection_drawing_spec=self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2)
+            )
+            
+            nose_idx = 0  # NOSE
+            right_hand_idx = 20  # RIGHT_INDEX
+            left_hand_idx = 19  # LEFT_INDEX
+            
+            # Control gestures
+            if self.state == "idle" and self.is_hand_to_nose(landmarks, w, h, right_hand_idx, nose_idx):
+                self.state = "armed"
+                p_nose = self.landmark_xy(landmarks, nose_idx, w, h)
+                if p_nose:
+                    self.baseline_nose_y = p_nose[1]
+                    self.peak_delta_pixels = 0.0
+                    self.nose_y_buffer = []
+                    self.prev_dy = None
+                    self.airborne_frames = 0
+                self.feedback = "ARMED - Jump when ready!"
+            
+            if self.state in ("armed", "landed") and self.is_hand_to_nose(landmarks, w, h, left_hand_idx, nose_idx):
+                # Reset
+                self.state = "idle"
+                self.baseline_nose_y = None
+                self.peak_delta_pixels = 0.0
+                self.last_jump_inches = 0.0
+                self.feedback = "Touch right hand to nose to ARM"
+            
+            # Measurement logic
+            p_nose = self.landmark_xy(landmarks, nose_idx, w, h)
+            if p_nose and self.baseline_nose_y is not None:
+                # Smooth nose y
+                self.nose_y_buffer.append(p_nose[1])
+                if len(self.nose_y_buffer) > 5:
+                    self.nose_y_buffer.pop(0)
+                smooth_nose_y = sum(self.nose_y_buffer) / len(self.nose_y_buffer)
+                
+                dy = self.baseline_nose_y - smooth_nose_y  # positive when moving up
+                self.peak_delta_pixels = max(self.peak_delta_pixels, dy)
+                
+                # State transitions
+                arm_thresh = max(8, 0.015 * h)
+                land_thresh = max(4, 0.008 * h)
+                
+                if self.state == "armed" and dy > arm_thresh:
+                    self.state = "airborne"
+                    self.airborne_frames = 0
+                    self.feedback = "AIRBORNE!"
+                
+                elif self.state == "airborne":
+                    self.airborne_frames += 1
+                    if dy < land_thresh and self.airborne_frames >= self.min_airborne_frames:
+                        # Landing detected
+                        self.state = "landed"
+                        inches = max(0.0, self.peak_delta_pixels) * self.inches_per_pixel()
+                        self.last_jump_inches = inches
+                        
+                        if inches < self.min_jump_inches:
+                            self.last_jump_valid = False
+                            self.last_jump_reason = "too-small"
+                            self.feedback = f"Jump too small: {inches:.1f} in"
+                        else:
+                            cheated = self.detect_squat_cheat(landmarks, w, h)
+                            if cheated:
+                                self.last_jump_valid = False
+                                self.last_jump_reason = "squat-cheat"
+                                self.feedback = f"INVALID (squat): {inches:.1f} in"
+                            else:
+                                self.last_jump_valid = True
+                                self.last_jump_reason = "ok"
+                                self.feedback = f"VALID JUMP: {inches:.1f} inches!"
+        else:
+            self.feedback = "No person detected"
+        
+        # Draw overlay
+        self._draw_overlay(image_bgr)
+        
+        return image_bgr
+    
+    def _draw_overlay(self, image):
+        """Draw status overlay."""
+        h, w = image.shape[:2]
+        
+        # Semi-transparent box
+        box_w = 300
+        box_h = 140
+        box_x = 10
+        box_y = 10
+        
+        overlay = image.copy()
+        cv2.rectangle(overlay, (box_x, box_y), (box_x + box_w, box_y + box_h), (0, 0, 0), -1)
+        alpha = 0.5
+        cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0, image)
+        
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        y = box_y + 25
+        
+        # State
+        color = (0, 255, 255) if self.state == "armed" else (255, 200, 0) if self.state == "airborne" else (200, 200, 200)
+        cv2.putText(image, f'State: {self.state.upper()}', (box_x + 10, y), font, 0.7, color, 2)
+        y += 30
+        
+        # Last jump result
+        if self.last_jump_inches > 0:
+            jump_color = (0, 255, 0) if self.last_jump_valid else (0, 0, 255)
+            status_text = "VALID" if self.last_jump_valid else "INVALID"
+            cv2.putText(image, f'Last: {status_text}', (box_x + 10, y), font, 0.6, jump_color, 2)
+            y += 28
+            cv2.putText(image, f'Height: {self.last_jump_inches:.1f} in', (box_x + 10, y), font, 0.6, jump_color, 2)
+        
+        # Feedback at bottom
+        cv2.putText(image, self.feedback, (10, h - 10), font, 0.6, (0, 255, 255), 2)
+        
+        # Instructions at bottom
+        cv2.putText(image, "Right hand->nose: ARM", (10, h - 70), font, 0.5, (200, 200, 200), 1)
+        cv2.putText(image, "Left hand->nose: RESET", (10, h - 50), font, 0.5, (200, 200, 200), 1)
+    
+    def run_processing(self):
+        """Main processing loop."""
+        while self.running:
+            try:
+                if not self.cap or not self.cap.isOpened():
+                    time.sleep(0.1)
+                    continue
+                
+                ret, frame = self.cap.read()
+                if not ret:
+                    time.sleep(0.1)
+                    continue
+                
+                processed_frame = self.process_frame(frame)
+                
+                with self.frame_lock:
+                    self.current_frame = processed_frame
+                
+            except Exception as e:
+                print(f"❌ Processing error: {e}")
+                time.sleep(0.1)
+    
+    def start(self):
+        """Start background processing."""
+        if not self.running:
+            self.running = True
+            self.thread = threading.Thread(target=self.run_processing, daemon=True)
+            self.thread.start()
+            print("▶️  Jump training started")
+    
+    def stop(self):
+        """Stop background processing."""
+        if self.running:
+            self.running = False
+            if self.thread and self.thread.is_alive():
+                self.thread.join(timeout=2)
+            print("⏹️  Jump training stopped")
+    
+    def get_frame(self):
+        """Get latest frame as JPEG bytes."""
+        with self.frame_lock:
+            if self.current_frame is not None:
+                try:
+                    _, buffer = cv2.imencode('.jpg', self.current_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    return buffer.tobytes()
+                except Exception as e:
+                    print(f"❌ Frame encoding error: {e}")
+                    return None
+            return None
+        return None
+    
+    def get_status(self):
+        """Get current status for API."""
+        return {
+            'state': self.state,
+            'last_jump_inches': round(self.last_jump_inches, 2),
+            'last_jump_valid': self.last_jump_valid,
+            'last_jump_reason': self.last_jump_reason,
+            'feedback': self.feedback,
+            'camera_ready': self.camera_initialized
+        }
+    
+    def release(self):
+        """Release resources."""
+        self.stop()
+        try:
+            if hasattr(self, 'pose') and self.pose:
+                self.pose.close()
+        except Exception as e:
+            print(f"⚠️  Error closing pose: {e}")
+        
+        try:
+            if hasattr(self, 'cap') and self.cap:
+                self.cap.release()
+        except Exception as e:
+            print(f"⚠️  Error releasing camera: {e}")
+        
+        print("🧹 Jump trainer resources released")
+
 
 if __name__ == "__main__":
     main()
