@@ -119,16 +119,19 @@ class FitnessTrainer:
             if i not in indices_to_try:
                 indices_to_try.append(i)
 
-        # Build backend list
+        # Build backend list - PREFER DirectShow on Windows (more stable)
         backends_to_try = []
         if self.camera_backend == 'dshow' and hasattr(cv2, 'CAP_DSHOW'):
             backends_to_try.append(cv2.CAP_DSHOW)
-        if self.camera_backend == 'msmf' and hasattr(cv2, 'CAP_MSMF'):
+        elif self.camera_backend == 'msmf' and hasattr(cv2, 'CAP_MSMF'):
             backends_to_try.append(cv2.CAP_MSMF)
-        if hasattr(cv2, 'CAP_DSHOW') and cv2.CAP_DSHOW not in backends_to_try:
-            backends_to_try.append(cv2.CAP_DSHOW)
-        if hasattr(cv2, 'CAP_MSMF') and cv2.CAP_MSMF not in backends_to_try:
-            backends_to_try.append(cv2.CAP_MSMF)
+        else:
+            # Default: Try DirectShow FIRST (best for Windows stability)
+            if hasattr(cv2, 'CAP_DSHOW'):
+                backends_to_try.append(cv2.CAP_DSHOW)
+            if hasattr(cv2, 'CAP_MSMF'):
+                backends_to_try.append(cv2.CAP_MSMF)
+        # Fallback to default backend only if others fail
         backends_to_try.append(None)
 
         for idx in indices_to_try:
@@ -152,9 +155,9 @@ class FitnessTrainer:
 
                     # Try reading a few frames to ensure the stream is alive
                     ok = False
-                    for _ in range(3):
+                    for _ in range(5):
                         ret, test_frame = cap.read()
-                        if ret and test_frame is not None:
+                        if ret and test_frame is not None and test_frame.size > 0:
                             ok = True
                             break
                         time.sleep(0.1)
@@ -166,17 +169,38 @@ class FitnessTrainer:
                             pass
                         continue
 
-                    # Configure and accept this capture
+                    # Configure and accept this capture - CRITICAL for stability
                     try:
+                        # Set resolution FIRST
                         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-                        # Not all backends support buffersize; ignore errors
+                        
+                        # CRITICAL: Disable buffering completely (buffer size = 1)
+                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                        
+                        # Force 30 FPS for stability
+                        cap.set(cv2.CAP_PROP_FPS, 30)
+                        
+                        # Try to disable auto-exposure (reduces flicker/corruption)
                         try:
-                            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                        except Exception:
+                            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+                        except:
                             pass
-                    except Exception:
-                        pass
+                        
+                        # Set FOURCC codec to MJPEG for better compatibility
+                        try:
+                            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
+                        except:
+                            pass
+                        
+                        # Disable any conversion
+                        try:
+                            cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+                        except:
+                            pass
+                            
+                    except Exception as e:
+                        print(f"⚠️  Some camera properties couldn't be set: {e}")
 
                     self.cap = cap
                     self.camera_index = idx
@@ -497,10 +521,36 @@ class FitnessTrainer:
     
     def process_frame(self, image):
         """Process a single frame for pose detection."""
-        if image is None:
+        if image is None or image.size == 0:
             return self.create_placeholder_frame("No camera input")
+        
+        # Validate frame dimensions and integrity
+        if len(image.shape) != 3 or image.shape[2] != 3:
+            return self.create_placeholder_frame("Invalid frame format")
             
         try:
+            # CRITICAL: Create a deep copy to avoid any buffer corruption
+            image = np.copy(image)
+            
+            # Enhanced corruption detection
+            h, w = image.shape[:2]
+            
+            # Check frame is reasonable size
+            if h < 100 or w < 100:
+                return self.create_placeholder_frame("Invalid frame size")
+            
+            # Check for corruption in bottom region (common corruption area)
+            bottom_half = image[h//2:, :]
+            bottom_nonzero = np.count_nonzero(bottom_half)
+            bottom_total = bottom_half.size
+            
+            if bottom_nonzero < (bottom_total * 0.15):
+                return self.create_placeholder_frame("Corrupted frame (bottom region)")
+            
+            # Check overall frame validity
+            if np.count_nonzero(image) < (image.size * 0.1):
+                return self.create_placeholder_frame("Corrupted frame detected")
+            
             # Convert BGR to RGB
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             image_rgb.flags.writeable = False
@@ -539,12 +589,14 @@ class FitnessTrainer:
             return image_bgr
             
         except Exception as e:
+            print(f"❌ Frame processing error: {e}")
             return self.create_placeholder_frame(f"Processing error: {str(e)}")
     
     def run_processing(self):
         """Main processing loop running in background thread."""
         consecutive_failures = 0
         max_failures = 30  # Allow 30 consecutive failures before giving up
+        frame_skip = 0  # Skip corrupted frames
         
         while self.running:
             if not self.camera_initialized or not self.cap or not self.cap.isOpened():
@@ -559,28 +611,73 @@ class FitnessTrainer:
                     continue
             
             try:
-                ret, frame = self.cap.read()
-                if ret and frame is not None:
-                    consecutive_failures = 0
-                    processed_frame = self.process_frame(frame)
-                    
-                    with self.frame_lock:
-                        self.current_frame = processed_frame.copy()
+                # Aggressive buffer clearing - flush old frames completely
+                for _ in range(4):  # Increased from 2 to 4
+                    self.cap.grab()
+                
+                ret, frame = self.cap.retrieve()
+                
+                if ret and frame is not None and frame.size > 0:
+                    # Enhanced frame validation
+                    if len(frame.shape) == 3 and frame.shape[2] == 3:
+                        h, w = frame.shape[:2]
+                        
+                        # Check if frame dimensions are correct
+                        if h < 100 or w < 100:
+                            frame_skip += 1
+                            continue
+                        
+                        # Check for corruption in different regions of the frame
+                        # Split frame into thirds vertically
+                        third_h = h // 3
+                        top_third = frame[0:third_h, :]
+                        middle_third = frame[third_h:2*third_h, :]
+                        bottom_third = frame[2*third_h:, :]
+                        
+                        # Check each region for corruption (too many zeros = noise/corruption)
+                        top_valid = np.count_nonzero(top_third) > (top_third.size * 0.15)
+                        middle_valid = np.count_nonzero(middle_third) > (middle_third.size * 0.15)
+                        bottom_valid = np.count_nonzero(bottom_third) > (bottom_third.size * 0.15)
+                        
+                        # Frame is only valid if all regions pass
+                        if top_valid and middle_valid and bottom_valid:
+                            consecutive_failures = 0
+                            frame_skip = 0
+                            
+                            # Extra safety: make a deep copy immediately
+                            frame_copy = np.copy(frame)
+                            processed_frame = self.process_frame(frame_copy)
+                            
+                            with self.frame_lock:
+                                self.current_frame = np.copy(processed_frame)
+                        else:
+                            frame_skip += 1
+                            if frame_skip > 5:
+                                print(f"⚠️  Corrupted frames detected (top:{top_valid}, mid:{middle_valid}, bot:{bottom_valid})")
+                                # Force camera reinit on persistent corruption
+                                if frame_skip > 15:
+                                    print(f"🔄 Reinitializing camera due to persistent corruption")
+                                    self.camera_initialized = False
+                                    frame_skip = 0
+                    else:
+                        frame_skip += 1
+                        consecutive_failures += 1
                 else:
                     consecutive_failures += 1
                     if consecutive_failures > max_failures:
                         self.camera_initialized = False
                         self.feedback = "Camera connection lost"
+                        print(f"❌ Camera connection lost after {max_failures} failures")
                         
             except Exception as e:
                 consecutive_failures += 1
-                print(f"❌ Frame processing error: {e}")
+                print(f"❌ Frame capture error: {e}")
                 
                 if consecutive_failures > max_failures:
                     self.camera_initialized = False
                     self.feedback = f"Camera error: {str(e)}"
             
-            time.sleep(0.01)  # ~100 FPS processing
+            time.sleep(0.033)  # ~30 FPS processing (more stable)
     
     def start(self):
         """Start background processing."""
@@ -614,9 +711,19 @@ class FitnessTrainer:
         with self.frame_lock:
             if self.current_frame is not None:
                 try:
-                    _, buffer = cv2.imencode('.jpg', self.current_frame, 
-                                           [cv2.IMWRITE_JPEG_QUALITY, 85])
-                    return buffer.tobytes()
+                    # Use higher quality encoding and proper parameters
+                    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90,
+                                   int(cv2.IMWRITE_JPEG_OPTIMIZE), 1]
+                    success, buffer = cv2.imencode('.jpg', self.current_frame, encode_param)
+                    
+                    if success and buffer is not None:
+                        return buffer.tobytes()
+                    else:
+                        print(f"⚠️  Frame encoding failed")
+                        # Return placeholder frame
+                        placeholder = self.create_placeholder_frame("Encoding error")
+                        _, buffer = cv2.imencode('.jpg', placeholder, encode_param)
+                        return buffer.tobytes()
                 except Exception as e:
                     print(f"❌ Frame encoding error: {e}")
                     # Return placeholder frame
@@ -790,13 +897,44 @@ class JumpTrainer:
                     self.cap = cv2.VideoCapture(self.camera_index)
                 
                 if self.cap and self.cap.isOpened():
+                    # Set resolution first
                     self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                     self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                    
+                    # CRITICAL: Disable buffering
+                    self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    
+                    # Force 30 FPS
                     self.cap.set(cv2.CAP_PROP_FPS, 30)
                     
-                    # Test read
-                    ret, _ = self.cap.read()
-                    if ret:
+                    # Set MJPEG codec for compatibility
+                    try:
+                        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
+                    except:
+                        pass
+                    
+                    # Disable auto exposure
+                    try:
+                        self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+                    except:
+                        pass
+                    
+                    # Disable RGB conversion
+                    try:
+                        self.cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+                    except:
+                        pass
+                    
+                    # Test read multiple frames
+                    ok = False
+                    for _ in range(5):
+                        ret, frame = self.cap.read()
+                        if ret and frame is not None and frame.size > 0:
+                            ok = True
+                            break
+                        time.sleep(0.1)
+                    
+                    if ok:
                         self.camera_initialized = True
                         print(f"✅ Jump camera initialized at index {self.camera_index} (attempt {attempt + 1})")
                         return
@@ -865,6 +1003,16 @@ class JumpTrainer:
     
     def process_frame(self, frame):
         """Process a single frame for jump detection."""
+        if frame is None or frame.size == 0:
+            return np.zeros((480, 640, 3), dtype=np.uint8)
+        
+        # Validate frame integrity
+        if len(frame.shape) != 3 or frame.shape[2] != 3:
+            return np.zeros((480, 640, 3), dtype=np.uint8)
+        
+        # CRITICAL: Deep copy to avoid buffer corruption
+        frame = np.copy(frame)
+        
         h, w = frame.shape[:2]
         image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.pose.process(image_rgb)
@@ -998,21 +1146,57 @@ class JumpTrainer:
     
     def run_processing(self):
         """Main processing loop."""
+        frame_skip = 0
+        
         while self.running:
             try:
                 if not self.cap or not self.cap.isOpened():
                     time.sleep(0.1)
                     continue
                 
-                ret, frame = self.cap.read()
-                if not ret:
-                    time.sleep(0.1)
+                # Aggressive buffer clearing (4 frames)
+                for _ in range(4):
+                    self.cap.grab()
+                
+                ret, frame = self.cap.retrieve()
+                
+                if not ret or frame is None or frame.size == 0:
+                    time.sleep(0.03)
                     continue
                 
-                processed_frame = self.process_frame(frame)
-                
-                with self.frame_lock:
-                    self.current_frame = processed_frame
+                # Enhanced frame validation
+                if len(frame.shape) == 3 and frame.shape[2] == 3:
+                    h, w = frame.shape[:2]
+                    
+                    # Check dimensions
+                    if h < 100 or w < 100:
+                        frame_skip += 1
+                        continue
+                    
+                    # Check for regional corruption
+                    third_h = h // 3
+                    top_third = frame[0:third_h, :]
+                    middle_third = frame[third_h:2*third_h, :]
+                    bottom_third = frame[2*third_h:, :]
+                    
+                    top_valid = np.count_nonzero(top_third) > (top_third.size * 0.15)
+                    middle_valid = np.count_nonzero(middle_third) > (middle_third.size * 0.15)
+                    bottom_valid = np.count_nonzero(bottom_third) > (bottom_third.size * 0.15)
+                    
+                    if top_valid and middle_valid and bottom_valid:
+                        frame_skip = 0
+                        # Deep copy for safety
+                        frame_copy = np.copy(frame)
+                        processed_frame = self.process_frame(frame_copy)
+                        
+                        with self.frame_lock:
+                            self.current_frame = np.copy(processed_frame)
+                    else:
+                        frame_skip += 1
+                        if frame_skip > 15:
+                            print(f"⚠️  Jump: Persistent frame corruption, reinitializing")
+                            self._init_camera()
+                            frame_skip = 0
                 
             except Exception as e:
                 print(f"❌ Processing error: {e}")
@@ -1039,12 +1223,19 @@ class JumpTrainer:
         with self.frame_lock:
             if self.current_frame is not None:
                 try:
-                    _, buffer = cv2.imencode('.jpg', self.current_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                    return buffer.tobytes()
+                    # Use higher quality encoding and proper parameters
+                    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90,
+                                   int(cv2.IMWRITE_JPEG_OPTIMIZE), 1]
+                    success, buffer = cv2.imencode('.jpg', self.current_frame, encode_param)
+                    
+                    if success and buffer is not None:
+                        return buffer.tobytes()
+                    else:
+                        print(f"⚠️  Frame encoding failed")
+                        return None
                 except Exception as e:
                     print(f"❌ Frame encoding error: {e}")
                     return None
-            return None
         return None
     
     def get_status(self):
